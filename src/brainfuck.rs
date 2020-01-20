@@ -2,7 +2,8 @@ use snafu::{ResultExt, Snafu};
 use std::io;
 use std::io::{Read, Write};
 
-#[derive(Debug, PartialEq)]
+/// A representation of all Brainfuck instructions
+#[derive(Debug, PartialEq, Clone)]
 pub enum Instruction {
     /// Increments the data pointer by one
     IncrementPointer,
@@ -22,9 +23,9 @@ pub enum Instruction {
     JumpBackwardsIfNotZero,
 }
 
-/// Parses a stream of bytes (assumed to be brainfuck source code) into a Vec of IR instructions
+/// Parses a stream of bytes (assumed to be brainfuck source code) into a Vec of Brainfuck instructions
 ///
-/// Does a few optimization passes to combine sequences of increments and precompute jump offsets
+/// Does no optimizations at all
 pub fn parse(stream: impl IntoIterator<Item = u8>) -> Vec<Instruction> {
     stream
         .into_iter()
@@ -44,7 +45,7 @@ pub fn parse(stream: impl IntoIterator<Item = u8>) -> Vec<Instruction> {
 
 /// A pure Brainfuck virtual machine
 ///
-/// Does not optimizations and is probably as slow as it gets
+/// Does no optimizations and is probably as slow as it gets
 pub struct Vm {
     program: Vec<Instruction>,
     program_counter: usize,
