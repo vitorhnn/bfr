@@ -1,6 +1,5 @@
 #[allow(dead_code)]
 // Sincerely, fuck this ISA
-
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum Register {
@@ -23,46 +22,133 @@ pub enum Register {
 }
 
 pub struct Emitter<'a> {
-    index: usize,
+    pub index: usize,
     buffer: &'a mut [u8],
 }
 
 impl<'a> Emitter<'a> {
     pub fn new(buffer: &'a mut [u8]) -> Self {
-        Emitter {
-            index: 0,
-            buffer,
-        }
+        Emitter { index: 0, buffer }
     }
 
-    pub fn emit(&mut self, byte: u8) {
-        self.buffer[self.index] = byte;
-        self.index += 1;
+    #[inline(always)]
+    pub fn emit(&mut self, emitted: &[u8]) {
+        self.buffer[self.index..self.index + emitted.len()].copy_from_slice(emitted);
+        self.index += emitted.len();
     }
 
     // mod is a keyword in Rust!
-    fn modrm(&mut self, mode: u8, reg: u8, rm: u8) {
+    fn modrm(&mut self, mode: u8, reg: u8, rm: u8) -> u8 {
         let mode = (mode & 0b11) << 6;
         let reg = (reg & 0b111) << 3;
         let rm = rm & 0b111;
 
-        self.emit(mode | reg | rm);
+        mode | reg | rm
     }
 
-    fn rexw_r(&mut self, register: Register) {
+    fn rexw_r(&mut self, register: Register) -> u8 {
         let mut rexw = 0b0100_1000;
 
         if register >= Register::R8 {
             rexw |= 0b0000_0100;
         }
 
-        self.emit(rexw);
+        rexw
     }
 
     pub fn addu8_reg(&mut self, register: Register, imm: u8) {
-        self.rexw_r(register);
-        self.emit(0x83);
-        self.modrm(0b11, 0, register as u8);
-        self.emit(imm);
+        let op = [
+            self.rexw_r(register),
+            0x83,
+            self.modrm(0b11, 0, register as u8),
+            imm,
+        ];
+
+        self.emit(&op);
+    }
+
+    pub fn subu8_reg(&mut self, register: Register, imm: u8) {
+        let op = [
+            self.rexw_r(register),
+            0x83,
+            self.modrm(0b11, 5, register as u8),
+            imm,
+        ];
+
+        self.emit(&op);
+    }
+
+    pub fn addu8_ptr(&mut self, register: Register, imm: u8) {
+        let op = [0x80, self.modrm(0b00, 0, register as u8), imm];
+
+        self.emit(&op);
+    }
+
+    pub fn subu8_ptr(&mut self, register: Register, imm: u8) {
+        let op = [0x80, self.modrm(0b00, 5, register as u8), imm];
+
+        self.emit(&op);
+    }
+
+    pub fn addu8_ptr_u8disp(&mut self, register: Register, disp: u8, imm: u8) {
+        let op = [0x80, self.modrm(0b01, 0, register as u8), disp, imm];
+
+        self.emit(&op);
+    }
+
+    pub fn subu8_ptr_u8disp(&mut self, register: Register, disp: u8, imm: u8) {
+        let op = [0x80, self.modrm(0b01, 5, register as u8), disp, imm];
+
+        self.emit(&op);
+    }
+
+    pub fn cmpu8_ptr(&mut self, register: Register, imm: u8) {
+        let op = [
+            0x80,
+            self.modrm(0b00, 7, register as u8),
+            imm
+        ];
+
+        self.emit(&op);
+    }
+
+    pub fn jneu32(&mut self, offset: u32) {
+        let mut op = [
+            0x0f,
+            0x85,
+            0,
+            0,
+            0,
+            0,
+        ];
+
+        let le_bytes = offset.to_le_bytes();
+
+        op[2] = le_bytes[0];
+        op[3] = le_bytes[1];
+        op[4] = le_bytes[2];
+        op[5] = le_bytes[3];
+
+        self.emit(&op);
+    }
+
+    pub fn jeu32(&mut self, offset: u32) {
+        let mut op = [
+            0x0f,
+            0x84,
+            0,
+            0,
+            0,
+            0,
+        ];
+
+        let le_bytes = offset.to_le_bytes();
+
+        op[2] = le_bytes[0];
+        op[3] = le_bytes[1];
+        op[4] = le_bytes[2];
+        op[5] = le_bytes[3];
+
+        self.emit(&op);
     }
 }

@@ -1,17 +1,18 @@
+use libc;
 /// Toy x86_64 JIT
-use std::alloc::{Layout, alloc, dealloc};
+use std::alloc::{alloc, dealloc, Layout};
+use std::io::{Read, Write};
+use std::mem::transmute;
 use std::ptr::write_bytes;
 use std::slice;
-use std::mem::transmute;
-use std::io::{Read, Write};
-use libc;
+use std::collections::BTreeMap;
+use std::convert::TryFrom;
 
 mod x86;
 
 use crate::ir::Instruction;
 
 const PAGE_SIZE: usize = 4096;
-
 
 pub struct Program {
     contents: *mut u8,
@@ -22,7 +23,7 @@ impl Program {
     pub fn new(size: usize) -> Self {
         // allocate some memory to write our instructions
         let size = size * PAGE_SIZE;
-        let layout = Layout::from_size_align(PAGE_SIZE, size).unwrap();
+        let layout = Layout::from_size_align(size, PAGE_SIZE).unwrap();
         let contents = unsafe {
             let raw = alloc(layout);
             write_bytes(raw, 0xc3, size);
@@ -30,10 +31,7 @@ impl Program {
             raw
         };
 
-        Program {
-            contents,
-            size
-        }
+        Program { contents, size }
     }
 
     pub fn to_sliceable(self) -> SliceableProgram {
@@ -47,8 +45,10 @@ impl Program {
 
 impl Drop for Program {
     fn drop(&mut self) {
-        let layout = Layout::from_size_align(PAGE_SIZE, self.size).unwrap();
-        unsafe { dealloc(self.contents, layout); }
+        let layout = Layout::from_size_align(self.size, PAGE_SIZE).unwrap();
+        unsafe {
+            dealloc(self.contents, layout);
+        }
     }
 }
 
@@ -58,22 +58,32 @@ pub struct SliceableProgram {
 
 impl SliceableProgram {
     pub fn new(program: Program) -> Self {
-        unsafe { libc::mprotect(program.contents as *mut libc::c_void, program.size, libc::PROT_READ | libc::PROT_WRITE); }
-        SliceableProgram {
-            program,
+        unsafe {
+            libc::mprotect(
+                program.contents as *mut libc::c_void,
+                program.size,
+                libc::PROT_READ | libc::PROT_WRITE,
+            );
         }
+        SliceableProgram { program }
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts(self.program.contents, self.program.size * PAGE_SIZE) }
+        unsafe { slice::from_raw_parts(self.program.contents, self.program.size) }
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { slice::from_raw_parts_mut(self.program.contents, self.program.size * PAGE_SIZE) }
+        unsafe { slice::from_raw_parts_mut(self.program.contents, self.program.size) }
     }
 
     pub fn lock(self) -> Program {
-        unsafe { libc::mprotect(self.program.contents as *mut libc::c_void, self.program.size, libc::PROT_NONE); }
+        unsafe {
+            libc::mprotect(
+                self.program.contents as *mut libc::c_void,
+                self.program.size,
+                libc::PROT_NONE,
+            );
+        }
         self.program
     }
 }
@@ -84,11 +94,15 @@ pub struct CallableProgram {
 
 impl CallableProgram {
     pub fn new(program: Program) -> Self {
-        unsafe { libc::mprotect(program.contents as *mut libc::c_void, program.size, libc::PROT_READ | libc::PROT_EXEC); }
-
-        CallableProgram {
-            program,
+        unsafe {
+            libc::mprotect(
+                program.contents as *mut libc::c_void,
+                program.size,
+                libc::PROT_READ | libc::PROT_EXEC,
+            );
         }
+
+        CallableProgram { program }
     }
 
     pub fn as_function(&mut self) -> unsafe extern "C" fn(*mut u8) -> i32 {
@@ -100,34 +114,107 @@ impl CallableProgram {
     }
 }
 
+#[derive(Debug)]
+struct JumpInfo {
+    asm_offset: usize,
+    target: usize,
+}
 
 pub fn transform(instructions: &[Instruction]) -> Program {
     // we'll emit something that respects x86_64 system-v:
     // rdi (1st parameter): pointer to cell array
-    let program = Program::new(1);
+    let program = Program::new(8);
     let mut sliceable = program.to_sliceable();
-    
+
     let slice = sliceable.as_mut_slice();
     let mut emitter = x86::Emitter::new(slice);
-    emitter.emit(0x31);
-    emitter.emit(0xc0);
 
-    emitter.addu8_reg(x86::Register::Rax, 42);
+    let mut jumps = BTreeMap::new();
 
-    /*
-    for instr in instructions {
+    for (idx, instr) in instructions.iter().enumerate() {
         match instr {
             Instruction::IncrementPointer(inc) => {
                 if inc.is_positive() {
-
+                    emitter.addu8_reg(x86::Register::Rdi, *inc as u8);
+                } else if inc.is_negative() {
+                    emitter.subu8_reg(x86::Register::Rdi, -*inc as u8);
                 }
-                
-                break;
             }
-            _ => break,
+            Instruction::IncrementByte(inc) => {
+                if inc.is_positive() {
+                    emitter.addu8_ptr(x86::Register::Rdi, *inc as u8);
+                } else if inc.is_negative() {
+                    emitter.subu8_ptr(x86::Register::Rdi, -*inc as u8);
+                }
+            }
+            Instruction::IncrementPointerAndByte(pointer_inc, byte_inc) => {
+                if byte_inc.is_positive() {
+                    emitter.addu8_ptr_u8disp(
+                        x86::Register::Rdi,
+                        *pointer_inc as u8,
+                        *byte_inc as u8,
+                    );
+                } else if byte_inc.is_negative() {
+                    emitter.subu8_ptr_u8disp(
+                        x86::Register::Rdi,
+                        *pointer_inc as u8,
+                        -*byte_inc as u8,
+                    );
+                }
+
+                if pointer_inc.is_positive() {
+                    emitter.addu8_reg(x86::Register::Rdi, *pointer_inc as u8);
+                } else if pointer_inc.is_negative() {
+                    emitter.subu8_reg(x86::Register::Rdi, -*pointer_inc as u8);
+                }
+            },
+            // The way I've implemented jumps is terribly hacky. I should probably find a better solution someday
+            Instruction::JumpBackwardsIfNotZero(jmp) => {
+                emitter.cmpu8_ptr(x86::Register::Rdi, 0);
+
+                println!("idx: {}, jmp: {}", idx, jmp);
+                let jumpinfo = JumpInfo {
+                    target: idx - jmp,
+                    asm_offset: emitter.index,
+                };
+                jumps.insert(idx, jumpinfo);
+                
+                // bogus temp value
+                emitter.jneu32(42);
+            },
+            Instruction::JumpForwardsIfZero(jmp) => {
+                emitter.cmpu8_ptr(x86::Register::Rdi, 0);
+
+                println!("idx: {}, jmp: {}", idx, jmp);
+                let jumpinfo = JumpInfo {
+                    target: idx + jmp,
+                    asm_offset: emitter.index,
+                };
+
+                jumps.insert(idx, jumpinfo);
+                // bogus temp value
+                emitter.jeu32(42);
+            }
+            _ => (),
         }
     }
-    */
+
+    for (idx, jumpinfo) in &jumps {
+        let target = jumps.get(&jumpinfo.target).unwrap();
+
+        // this is kinda nuts, but I'll try to explain
+        // we encode jumps as x86 *near* (used to be short but brainfuck hates me) jumps
+        // which are two bytes: an opcode and an immediate 1 byte offset
+        // we do this indexing crazyness to rewrite our offset to our target's next instruction offset
+        let offset = (target.asm_offset as isize) - (jumpinfo.asm_offset as isize);
+
+        println!("{}", offset);
+        let le_bytes = (offset as u32).to_le_bytes();
+        slice[jumpinfo.asm_offset + 2] = le_bytes[0];
+        slice[jumpinfo.asm_offset + 3] = le_bytes[1];
+        slice[jumpinfo.asm_offset + 4] = le_bytes[2];
+        slice[jumpinfo.asm_offset + 5] = le_bytes[3];
+    }
 
     sliceable.lock()
 }
@@ -145,10 +232,11 @@ impl Vm {
         }
     }
 
+    #[inline(never)]
     pub fn vm_loop(&mut self, input: &mut dyn Read, output: &mut dyn Write) {
         let program = self.program.as_function();
         let res = unsafe { program(self.cells.as_mut_ptr() as *mut u8) };
 
-        panic!("{:?}", res);
+        println!("{:?}", res);
     }
 }

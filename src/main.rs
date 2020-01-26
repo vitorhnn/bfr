@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Vm::Bfr => {
             let ir = ir::transform(&parsed_bf)?;
             ir::Vm::new(ir).vm_loop(&mut stdin, &mut stdout)?;
-        },
+        }
         Vm::Jit => {
             let ir = ir::transform(&parsed_bf)?;
             let program = jit::transform(&ir);
