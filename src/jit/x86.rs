@@ -103,24 +103,13 @@ impl<'a> Emitter<'a> {
     }
 
     pub fn cmpu8_ptr(&mut self, register: Register, imm: u8) {
-        let op = [
-            0x80,
-            self.modrm(0b00, 7, register as u8),
-            imm
-        ];
+        let op = [0x80, self.modrm(0b00, 7, register as u8), imm];
 
         self.emit(&op);
     }
 
     pub fn jneu32(&mut self, offset: u32) {
-        let mut op = [
-            0x0f,
-            0x85,
-            0,
-            0,
-            0,
-            0,
-        ];
+        let mut op = [0x0f, 0x85, 0, 0, 0, 0];
 
         let le_bytes = offset.to_le_bytes();
 
@@ -133,14 +122,7 @@ impl<'a> Emitter<'a> {
     }
 
     pub fn jeu32(&mut self, offset: u32) {
-        let mut op = [
-            0x0f,
-            0x84,
-            0,
-            0,
-            0,
-            0,
-        ];
+        let mut op = [0x0f, 0x84, 0, 0, 0, 0];
 
         let le_bytes = offset.to_le_bytes();
 

@@ -1,12 +1,12 @@
 use libc;
 /// Toy x86_64 JIT
 use std::alloc::{alloc, dealloc, Layout};
+use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::io::{Read, Write};
 use std::mem::transmute;
 use std::ptr::write_bytes;
 use std::slice;
-use std::collections::BTreeMap;
-use std::convert::TryFrom;
 
 mod x86;
 
@@ -167,7 +167,7 @@ pub fn transform(instructions: &[Instruction]) -> Program {
                 } else if pointer_inc.is_negative() {
                     emitter.subu8_reg(x86::Register::Rdi, -*pointer_inc as u8);
                 }
-            },
+            }
             // The way I've implemented jumps is terribly hacky. I should probably find a better solution someday
             Instruction::JumpBackwardsIfNotZero(jmp) => {
                 emitter.cmpu8_ptr(x86::Register::Rdi, 0);
@@ -177,10 +177,10 @@ pub fn transform(instructions: &[Instruction]) -> Program {
                     asm_offset: emitter.index,
                 };
                 jumps.insert(idx, jumpinfo);
-                
+
                 // bogus temp value
                 emitter.jneu32(42);
-            },
+            }
             Instruction::JumpForwardsIfZero(jmp) => {
                 emitter.cmpu8_ptr(x86::Register::Rdi, 0);
 
