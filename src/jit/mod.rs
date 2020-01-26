@@ -34,11 +34,11 @@ impl Program {
         Program { contents, size }
     }
 
-    pub fn to_sliceable(self) -> SliceableProgram {
+    pub fn into_sliceable(self) -> SliceableProgram {
         SliceableProgram::new(self)
     }
 
-    pub fn to_callable(self) -> CallableProgram {
+    pub fn into_callable(self) -> CallableProgram {
         CallableProgram::new(self)
     }
 }
@@ -124,7 +124,7 @@ pub fn transform(instructions: &[Instruction]) -> Program {
     // we'll emit something that respects x86_64 system-v:
     // rdi (1st parameter): pointer to cell array
     let program = Program::new(8);
-    let mut sliceable = program.to_sliceable();
+    let mut sliceable = program.into_sliceable();
 
     let slice = sliceable.as_mut_slice();
     let mut emitter = x86::Emitter::new(slice);
@@ -172,7 +172,6 @@ pub fn transform(instructions: &[Instruction]) -> Program {
             Instruction::JumpBackwardsIfNotZero(jmp) => {
                 emitter.cmpu8_ptr(x86::Register::Rdi, 0);
 
-                println!("idx: {}, jmp: {}", idx, jmp);
                 let jumpinfo = JumpInfo {
                     target: idx - jmp,
                     asm_offset: emitter.index,
@@ -185,7 +184,6 @@ pub fn transform(instructions: &[Instruction]) -> Program {
             Instruction::JumpForwardsIfZero(jmp) => {
                 emitter.cmpu8_ptr(x86::Register::Rdi, 0);
 
-                println!("idx: {}, jmp: {}", idx, jmp);
                 let jumpinfo = JumpInfo {
                     target: idx + jmp,
                     asm_offset: emitter.index,
@@ -199,7 +197,7 @@ pub fn transform(instructions: &[Instruction]) -> Program {
         }
     }
 
-    for (idx, jumpinfo) in &jumps {
+    for jumpinfo in jumps.values() {
         let target = jumps.get(&jumpinfo.target).unwrap();
 
         // this is kinda nuts, but I'll try to explain
@@ -208,7 +206,6 @@ pub fn transform(instructions: &[Instruction]) -> Program {
         // we do this indexing crazyness to rewrite our offset to our target's next instruction offset
         let offset = (target.asm_offset as isize) - (jumpinfo.asm_offset as isize);
 
-        println!("{}", offset);
         let le_bytes = (offset as u32).to_le_bytes();
         slice[jumpinfo.asm_offset + 2] = le_bytes[0];
         slice[jumpinfo.asm_offset + 3] = le_bytes[1];
@@ -227,7 +224,7 @@ pub struct Vm {
 impl Vm {
     pub fn new(program: Program) -> Self {
         Vm {
-            program: program.to_callable(),
+            program: program.into_callable(),
             cells: [0; 30000],
         }
     }
