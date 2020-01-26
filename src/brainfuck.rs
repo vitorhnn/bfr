@@ -1,3 +1,5 @@
+#[forbid(unsafe_code)]
+
 use snafu::{ResultExt, Snafu};
 use std::io;
 use std::io::{Read, Write};

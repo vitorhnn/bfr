@@ -1,5 +1,6 @@
 pub mod brainfuck;
 pub mod ir;
+pub mod jit;
 
 use clap::arg_enum;
 use structopt::StructOpt;
@@ -15,6 +16,7 @@ arg_enum! {
     enum Vm {
         RawBf,
         Bfr,
+        Jit,
     }
 }
 
@@ -43,6 +45,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         Vm::Bfr => {
             let ir = ir::transform(&parsed_bf)?;
             ir::Vm::new(ir).vm_loop(&mut stdin, &mut stdout)?;
+        },
+        Vm::Jit => {
+            let ir = ir::transform(&parsed_bf)?;
+            let program = jit::transform(&ir);
+            jit::Vm::new(program).vm_loop(&mut stdin, &mut stdout);
         }
     }
 

@@ -1,3 +1,5 @@
+#[forbid(unsafe_code)]
+
 /// A very simple IR generated from Brainfuck bytecode and a VM that interprets it
 use itertools::Itertools;
 use snafu::{ResultExt, Snafu};
@@ -10,12 +12,14 @@ use crate::brainfuck::Instruction as BfInstruction;
 /// A (kinda) superset of brainfuck's instruction set.
 /// Attempts to combine operations which are commonly repeated (increments) and precompute jumps
 /// TODO: Maybe do more optimizations?
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Instruction {
     /// Increments the data pointer by its value
     IncrementPointer(i32),
     /// Increments the byte pointed by the data pointer by its value
     IncrementByte(i32),
+    /// Increments the data pointer by its first value and then increments the byte pointed by the data pointer by its second value
+    IncrementPointerAndByte(i32, i32),
     /// Writes the byte pointed by the data pointer to some output
     OutputByte,
     /// Reads a byte from some input to the byte pointed by the data pointer
@@ -97,6 +101,31 @@ pub fn transform(instructions: &[BfInstruction]) -> Result<Vec<Instruction>, Tra
         };
 
         transformed.push(res);
+    }
+
+    let prev = transformed;
+    let mut transformed = Vec::with_capacity(prev.len());
+    let mut it = prev.iter().peekable();
+
+    while let Some(instr) = it.next() {
+        let res = match instr {
+            Instruction::IncrementPointer(ptr_increment) => match it.peek() {
+                Some(Instruction::IncrementByte(byte_increment)) => {
+                    it.next();
+                    Some(Instruction::IncrementPointerAndByte(
+                        *ptr_increment,
+                        *byte_increment,
+                    ))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+
+        match res {
+            Some(instr) => transformed.push(instr),
+            None => transformed.push(instr.clone()),
+        }
     }
 
     // pass 2: precompute jumps
@@ -181,6 +210,18 @@ impl Vm {
                 let extended = *byte as i32;
                 // TODO: I'm fairly sure this is wrong
                 *byte = extended.wrapping_add(inc) as u8;
+                self.program_counter.wrapping_add(1)
+            }
+            Instruction::IncrementPointerAndByte(ptr_inc, byte_inc) => {
+                if self.data_pointer.wrapping_add(ptr_inc as usize) > self.cells.len() {
+                    panic!("data pointer out of bounds!");
+                }
+
+                self.data_pointer = self.data_pointer.wrapping_add(ptr_inc as usize);
+                let byte = self.current_byte_mut();
+                let extended = *byte as i32;
+                // TODO: I'm fairly sure this is wrong
+                *byte = extended.wrapping_add(byte_inc) as u8;
                 self.program_counter.wrapping_add(1)
             }
             Instruction::OutputByte => {
