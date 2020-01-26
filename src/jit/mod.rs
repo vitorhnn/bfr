@@ -202,8 +202,9 @@ pub fn transform(instructions: &[Instruction]) -> Program {
 
         // this is kinda nuts, but I'll try to explain
         // we encode jumps as x86 *near* (used to be short but brainfuck hates me) jumps
-        // which are two bytes: an opcode and an immediate 1 byte offset
+        // which are *six* bytes: two opcodes and 7 bytes of offset from the NEXT INSTRUCTION (I think?)
         // we do this indexing crazyness to rewrite our offset to our target's next instruction offset
+        // TODO: x86 jumps are hard. IIRC MIPS also does this. Check when I'm less sleepy and fix these comments
         let offset = (target.asm_offset as isize) - (jumpinfo.asm_offset as isize);
 
         let le_bytes = (offset as u32).to_le_bytes();
