@@ -1,4 +1,4 @@
-#[forbid(unsafe_code)]
+#![forbid(unsafe_code)]
 
 /// A very simple IR generated from Brainfuck bytecode and a VM that interprets it
 use itertools::Itertools;
@@ -185,13 +185,11 @@ impl Vm {
     }
 
     fn current_byte_mut(&mut self) -> &mut u8 {
-        // safety: we do bounds checking on increments and decrements to self.data_pointer
-        unsafe { self.cells.get_unchecked_mut(self.data_pointer) }
+        &mut self.cells[self.data_pointer]
     }
 
     fn current_byte(&self) -> &u8 {
-        // safety: we do bounds checking on increments and decrements to self.data_pointer
-        unsafe { self.cells.get_unchecked(self.data_pointer) }
+        &self.cells[self.data_pointer]
     }
 
     /// Executes a single BFR IR instruction

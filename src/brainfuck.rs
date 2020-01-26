@@ -1,4 +1,4 @@
-#[forbid(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use snafu::{ResultExt, Snafu};
 use std::io;
@@ -78,7 +78,7 @@ impl Vm {
 
     fn current_byte(&mut self) -> &mut u8 {
         // safety: we do bounds checking on increments and decrements to self.data_pointer
-        unsafe { self.cells.get_unchecked_mut(self.data_pointer) }
+        &mut self.cells[self.data_pointer]
     }
 
     /// Executes a single brainfuck instruction
