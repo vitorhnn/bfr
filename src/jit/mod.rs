@@ -1,9 +1,10 @@
-use libc;
 /// Toy x86_64 JIT
+
+use libc;
 use std::alloc::{alloc, dealloc, Layout};
 use std::collections::BTreeMap;
-use std::convert::TryFrom;
-use std::io::{Read, Write};
+use std::ffi::c_void;
+use std::io::{Read, Write, stdout};
 use std::mem::transmute;
 use std::ptr::write_bytes;
 use std::slice;
@@ -105,7 +106,7 @@ impl CallableProgram {
         CallableProgram { program }
     }
 
-    pub fn as_function(&mut self) -> unsafe extern "C" fn(*mut u8) -> i32 {
+    pub fn as_function(&mut self) -> unsafe extern "C" fn(*mut u8, *mut c_void) -> i32 {
         unsafe { transmute(self.program.contents) }
     }
 
@@ -193,6 +194,9 @@ pub fn transform(instructions: &[Instruction]) -> Program {
                 // bogus temp value
                 emitter.jeu32(42);
             }
+            Instruction::OutputByte => {
+                emitter.call64(x86::Register::Rsi);
+            }
             _ => (),
         }
     }
@@ -217,6 +221,11 @@ pub fn transform(instructions: &[Instruction]) -> Program {
     sliceable.lock()
 }
 
+unsafe extern "C" fn write_trampoline(byte: *mut u8) {
+    let mut output = stdout();
+    output.write(&[*byte]).unwrap();
+}
+
 pub struct Vm {
     program: CallableProgram,
     cells: [u8; 30000],
@@ -231,9 +240,9 @@ impl Vm {
     }
 
     #[inline(never)]
-    pub fn vm_loop(&mut self, input: &mut dyn Read, output: &mut dyn Write) {
+    pub fn vm_loop<'a>(&mut self, input: &mut dyn Read, output: &'a mut dyn Write) {
         let program = self.program.as_function();
-        let res = unsafe { program(self.cells.as_mut_ptr() as *mut u8) };
+        let res = unsafe { program(self.cells.as_mut_ptr() as *mut u8, write_trampoline as *mut c_void) };
 
         println!("{:?}", res);
     }

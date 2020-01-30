@@ -133,4 +133,10 @@ impl<'a> Emitter<'a> {
 
         self.emit(&op);
     }
+
+    pub fn call64(&mut self, register: Register) {
+        let op = [0xff, self.modrm(0b11, 2, register as u8)];
+
+        self.emit(&op);
+    }
 }
