@@ -38,7 +38,7 @@ impl<'a> Emitter<'a> {
     }
 
     // mod is a keyword in Rust!
-    fn modrm(&mut self, mode: u8, reg: u8, rm: u8) -> u8 {
+    fn modrm(&self, mode: u8, reg: u8, rm: u8) -> u8 {
         let mode = (mode & 0b11) << 6;
         let reg = (reg & 0b111) << 3;
         let rm = rm & 0b111;
@@ -46,7 +46,7 @@ impl<'a> Emitter<'a> {
         mode | reg | rm
     }
 
-    fn rexw_r(&mut self, register: Register) -> u8 {
+    fn rexw_r(&self, register: Register) -> u8 {
         let mut rexw = 0b0100_1000;
 
         if register >= Register::R8 {
@@ -54,6 +54,24 @@ impl<'a> Emitter<'a> {
         }
 
         rexw
+    }
+
+    fn rexw_r_rm(&self, register: Register, rm: Register) -> u8 {
+        let mut rexw = self.rexw_r(register);
+
+        if rm >= Register::R8 {
+            rexw |= 0b1;
+        }
+
+        rexw
+    }
+
+    fn rex_rm(&self, register: Register) -> Option<u8> {
+        if register > Register::R8 {
+            Some(0b0100_0001)
+        } else {
+            None
+        }
     }
 
     pub fn addu8_reg(&mut self, register: Register, imm: u8) {
@@ -135,7 +153,42 @@ impl<'a> Emitter<'a> {
     }
 
     pub fn call64(&mut self, register: Register) {
-        let op = [0xff, self.modrm(0b11, 2, register as u8)];
+        if let Some(rexrm) = self.rex_rm(register) {
+            let op = [rexrm, 0xff, self.modrm(0b11, 2, register as u8)];
+            self.emit(&op);
+        } else {
+            let op = [0xff, self.modrm(0b11, 2, register as u8)];
+            self.emit(&op);
+        }
+    }
+
+    pub fn push(&mut self, register: Register) {
+        if let Some(rexrm) = self.rex_rm(register) {
+            let op = [rexrm, 0xff, self.modrm(0b11, 6, register as u8)];
+            self.emit(&op);
+        } else {
+            let op = [0xff, self.modrm(0b11, 6, register as u8)];
+            self.emit(&op);
+        }
+    }
+
+    pub fn pop(&mut self, register: Register) {
+        if let Some(rexrm) = self.rex_rm(register) {
+            let op = [rexrm, 0x8f, self.modrm(0b11, 0, register as u8)];
+            self.emit(&op);
+        } else {
+            let op = [0x8f, self.modrm(0b11, 0, register as u8)];
+            self.emit(&op);
+        }
+    }
+
+    // I chose to match Intel's syntax for movs to keep my sanity while debugging
+    pub fn mov64_reg(&mut self, dst: Register, src: Register) {
+        let op = [
+            self.rexw_r_rm(src, dst),
+            0x89,
+            self.modrm(0b11, src as u8, dst as u8),
+        ];
 
         self.emit(&op);
     }

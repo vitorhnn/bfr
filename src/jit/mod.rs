@@ -1,10 +1,10 @@
 /// Toy x86_64 JIT
-
 use libc;
 use std::alloc::{alloc, dealloc, Layout};
 use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::ffi::c_void;
-use std::io::{Read, Write, stdout};
+use std::io::{Read, Write};
 use std::mem::transmute;
 use std::ptr::write_bytes;
 use std::slice;
@@ -106,7 +106,15 @@ impl CallableProgram {
         CallableProgram { program }
     }
 
-    pub fn as_function(&mut self) -> unsafe extern "C" fn(*mut u8, *mut c_void) -> i32 {
+    pub fn as_function(
+        &mut self,
+    ) -> unsafe extern "C" fn(
+        *mut u8,
+        *mut c_void,
+        *mut WriteWrapper,
+        *mut c_void,
+        *mut ReadWrapper,
+    ) -> i32 {
         unsafe { transmute(self.program.contents) }
     }
 
@@ -124,11 +132,33 @@ struct JumpInfo {
 pub fn transform(instructions: &[Instruction]) -> Program {
     // we'll emit something that respects x86_64 system-v:
     // rdi (1st parameter): pointer to cell array
+    // rsi (2nd parameter): pointer to output function
+    // rdx (3rd parameter): pointer to WriteWrapper
+    // rcx (4th parameter): pointer to input function
+    // r8  (5th parameter): pointer to ReadWrapper
     let program = Program::new(8);
     let mut sliceable = program.into_sliceable();
 
     let slice = sliceable.as_mut_slice();
     let mut emitter = x86::Emitter::new(slice);
+    // we receive a stack that's misaligned by 8 bytes at the start of the function
+    // we always push on argument onto it and that aligns it :)
+
+    // move arguments to saved registers
+    // rsi -> rbp
+    // rdx -> r12
+    // rcx -> r13
+    // r8 -> r14
+
+    emitter.push(x86::Register::Rbp);
+    emitter.push(x86::Register::R12);
+    emitter.push(x86::Register::R13);
+    emitter.push(x86::Register::R14);
+
+    emitter.mov64_reg(x86::Register::Rbp, x86::Register::Rsi);
+    emitter.mov64_reg(x86::Register::R12, x86::Register::Rdx);
+    emitter.mov64_reg(x86::Register::R13, x86::Register::Rcx);
+    emitter.mov64_reg(x86::Register::R14, x86::Register::R8);
 
     let mut jumps = BTreeMap::new();
 
@@ -195,11 +225,28 @@ pub fn transform(instructions: &[Instruction]) -> Program {
                 emitter.jeu32(42);
             }
             Instruction::OutputByte => {
-                emitter.call64(x86::Register::Rsi);
+                // move ptr to WriteWrapper to Rsi
+                emitter.mov64_reg(x86::Register::Rsi, x86::Register::R12);
+
+                emitter.push(x86::Register::Rdi);
+                emitter.call64(x86::Register::Rbp);
+                emitter.pop(x86::Register::Rdi);
             }
-            _ => (),
+            Instruction::ReadByte => {
+                // move ptr to ReadWrapper to Rsi
+                emitter.mov64_reg(x86::Register::Rsi, x86::Register::R14);
+
+                emitter.push(x86::Register::Rdi);
+                emitter.call64(x86::Register::R13);
+                emitter.pop(x86::Register::Rdi);
+            }
         }
     }
+
+    emitter.pop(x86::Register::R14);
+    emitter.pop(x86::Register::R13);
+    emitter.pop(x86::Register::R12);
+    emitter.pop(x86::Register::Rbp);
 
     for jumpinfo in jumps.values() {
         let target = jumps.get(&jumpinfo.target).unwrap();
@@ -211,7 +258,9 @@ pub fn transform(instructions: &[Instruction]) -> Program {
         // TODO: x86 jumps are hard. IIRC MIPS also does this. Check when I'm less sleepy and fix these comments
         let offset = (target.asm_offset as isize) - (jumpinfo.asm_offset as isize);
 
-        let le_bytes = (offset as u32).to_le_bytes();
+        let le_bytes = i32::try_from(offset)
+            .expect("offset overflowed i32")
+            .to_le_bytes();
         slice[jumpinfo.asm_offset + 2] = le_bytes[0];
         slice[jumpinfo.asm_offset + 3] = le_bytes[1];
         slice[jumpinfo.asm_offset + 4] = le_bytes[2];
@@ -221,9 +270,27 @@ pub fn transform(instructions: &[Instruction]) -> Program {
     sliceable.lock()
 }
 
-unsafe extern "C" fn write_trampoline(byte: *mut u8) {
-    let mut output = stdout();
-    output.write(&[*byte]).unwrap();
+unsafe extern "C" fn write_trampoline(byte_ptr: *mut u8, wrapper_ptr: *mut WriteWrapper) {
+    let wrapper = &*wrapper_ptr;
+    let output = &mut *wrapper.write;
+    let byte = *byte_ptr;
+    output.write(&[byte]).unwrap();
+}
+
+unsafe extern "C" fn read_trampoline(byte_ptr: *mut u8, wrapper_ptr: *mut ReadWrapper) {
+    let wrapper = &*wrapper_ptr;
+    let input = &mut *wrapper.read;
+    let slice = slice::from_raw_parts_mut(byte_ptr, 1);
+    input.read(slice).unwrap();
+}
+
+// I thought about a Wrapper<T>, but I'm not going to muck aroung with generics here
+pub struct WriteWrapper {
+    write: *mut dyn Write,
+}
+
+pub struct ReadWrapper {
+    read: *mut dyn Read,
 }
 
 pub struct Vm {
@@ -240,10 +307,25 @@ impl Vm {
     }
 
     #[inline(never)]
-    pub fn vm_loop<'a>(&mut self, input: &mut dyn Read, output: &'a mut dyn Write) {
+    pub fn vm_loop(&mut self, input: &mut dyn Read, output: &mut dyn Write) {
         let program = self.program.as_function();
-        let res = unsafe { program(self.cells.as_mut_ptr() as *mut u8, write_trampoline as *mut c_void) };
 
-        println!("{:?}", res);
+        let mut out_wrapper = WriteWrapper {
+            write: output as *const dyn Write as *mut dyn Write,
+        };
+
+        let mut in_wrapper = ReadWrapper {
+            read: input as *const dyn Read as *mut dyn Read,
+        };
+
+        unsafe {
+            program(
+                self.cells.as_mut_ptr() as *mut u8,
+                write_trampoline as *mut c_void,
+                &mut out_wrapper as *mut WriteWrapper,
+                read_trampoline as *mut c_void,
+                &mut in_wrapper as *mut ReadWrapper,
+            )
+        };
     }
 }
