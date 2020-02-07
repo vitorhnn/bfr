@@ -274,14 +274,14 @@ unsafe extern "C" fn write_trampoline(byte_ptr: *mut u8, wrapper_ptr: *mut Write
     let wrapper = &*wrapper_ptr;
     let output = &mut *wrapper.write;
     let byte = *byte_ptr;
-    output.write(&[byte]).unwrap();
+    output.write_all(&[byte]).unwrap();
 }
 
 unsafe extern "C" fn read_trampoline(byte_ptr: *mut u8, wrapper_ptr: *mut ReadWrapper) {
     let wrapper = &*wrapper_ptr;
     let input = &mut *wrapper.read;
     let slice = slice::from_raw_parts_mut(byte_ptr, 1);
-    input.read(slice).unwrap();
+    input.read_exact(slice).unwrap();
 }
 
 // I thought about a Wrapper<T>, but I'm not going to muck aroung with generics here
@@ -306,7 +306,6 @@ impl Vm {
         }
     }
 
-    #[inline(never)]
     pub fn vm_loop(&mut self, input: &mut dyn Read, output: &mut dyn Write) {
         let program = self.program.as_function();
 

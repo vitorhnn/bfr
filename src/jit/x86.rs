@@ -1,5 +1,5 @@
-#[allow(dead_code)]
 // Sincerely, fuck this ISA
+#[allow(dead_code)]
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum Register {
